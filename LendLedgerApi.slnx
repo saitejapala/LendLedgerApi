@@ -1,0 +1,8 @@
+<Solution>
+  <Project Path="LendLedgerApi.Application/LendLedgerApi.Application.csproj" />
+  <Project Path="LendLedgerApi.CacheService/LendLedgerApi.CacheService.csproj" />
+  <Project Path="LendLedgerApi.Domain/LendLedgerApi.Domain.csproj" />
+  <Project Path="LendLedgerApi.Email/LendLedgerApi.Email.csproj" />
+  <Project Path="LendLedgerApi.Infrastructure/LendLedgerApi.Infrastructure.csproj" />
+  <Project Path="LendLedgerApi.WebApi/LendLedgerApi.WebApi.csproj" />
+</Solution>

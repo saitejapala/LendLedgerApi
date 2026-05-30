@@ -1,0 +1,6 @@
+@LendLedgerApi.WebApi_HostAddress = http://localhost:5220
+
+GET {{LendLedgerApi.WebApi_HostAddress}}/weatherforecast/
+Accept: application/json
+
+###
