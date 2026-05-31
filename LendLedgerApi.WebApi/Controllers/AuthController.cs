@@ -86,5 +86,10 @@ namespace LendLedgerApi.WebApi.Controllers
 
             return Ok(result);
         }
+        [HttpGet("Health")]
+        public IActionResult Health()
+        {
+            return Ok("API is Online");
+        }
     }
 }

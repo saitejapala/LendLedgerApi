@@ -59,9 +59,9 @@ builder.Services.AddCors(options =>
 
 // 5. JWT Authentication Setup
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
-var secretKey = jwtSettings.GetValue<string>("Secret") ?? "LendLedgerSuperSecretJWTKey12345678901234567890!";
-var issuer = jwtSettings.GetValue<string>("Issuer") ?? "LendLedger.Api";
-var audience = jwtSettings.GetValue<string>("Audience") ?? "LendLedger.App";
+var secretKey = jwtSettings.GetValue<string>("Secret");
+var issuer = jwtSettings.GetValue<string>("Issuer");
+var audience = jwtSettings.GetValue<string>("Audience");
 
 builder.Services.AddAuthentication(options =>
 {
