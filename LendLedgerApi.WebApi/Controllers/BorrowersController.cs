@@ -56,35 +56,49 @@ namespace LendLedgerApi.WebApi.Controllers
                 .Take(pageSize)
                 .Select(b =>
                 {
-                    var remaining = b.Loan?.RemainingBalance ?? 0;
-                    var principal = b.Loan?.PrincipalAmount ?? 0;
+                    var remaining = b.Loans.Sum(l => l.RemainingBalance);
+                    var principal = b.Loans.Sum(l => l.PrincipalAmount);
                     
+                    var aggregatedStatus = "active";
+                    if (b.Loans.Any(l => l.Status == "overdue")) aggregatedStatus = "overdue";
+                    else if (b.Loans.Any() && b.Loans.All(l => l.Status == "paid")) aggregatedStatus = "paid";
+
                     string balanceVariant = "default";
-                    if (b.Loan?.Status == "overdue") balanceVariant = "error";
-                    else if (b.Loan?.Status == "paid") balanceVariant = "primary";
+                    if (aggregatedStatus == "overdue") balanceVariant = "error";
+                    else if (aggregatedStatus == "paid") balanceVariant = "primary";
+
+                    var nextLoan = b.Loans.Where(l => l.Status != "paid").OrderBy(l => l.DueDate).FirstOrDefault() 
+                                   ?? b.Loans.OrderByDescending(l => l.DueDate).FirstOrDefault();
 
                     string? nextEmiNote = null;
                     string? nextEmiNoteVariant = null;
-                    if (b.Loan?.Status == "overdue")
+                    if (aggregatedStatus == "overdue")
                     {
-                        var days = (int)(DateTime.UtcNow.Date - b.Loan.DueDate.Date).TotalDays;
-                        nextEmiNote = days > 0 ? $"{days} Days Overdue" : "Due Today";
-                        nextEmiNoteVariant = "error";
+                        var overdueLoan = b.Loans.Where(l => l.Status == "overdue").OrderBy(l => l.DueDate).FirstOrDefault();
+                        if (overdueLoan != null)
+                        {
+                            var days = (int)(DateTime.UtcNow.Date - overdueLoan.DueDate.Date).TotalDays;
+                            nextEmiNote = days > 0 ? $"{days} Days Overdue" : "Due Today";
+                            nextEmiNoteVariant = "error";
+                        }
                     }
+
+                    var recentLoanForId = b.Loans.Where(l => l.Status != "paid").OrderByDescending(l => l.StartDate).FirstOrDefault() 
+                                           ?? b.Loans.OrderByDescending(l => l.StartDate).FirstOrDefault();
 
                     return new BorrowerListItemDto(
                         Id: b.Id.ToString(),
                         Name: b.FullName,
-                        LoanId: b.Loan != null ? $"LID-{b.Loan.Id.ToString().Substring(0, 5).ToUpper()}" : string.Empty,
+                        LoanId: recentLoanForId != null ? $"LID-{recentLoanForId.Id.ToString().Substring(0, 5).ToUpper()}" : string.Empty,
                         Contact: b.Phone,
                         TotalLent: $"${principal:N2}",
                         RemainingBalance: $"${remaining:N2}",
                         BalanceVariant: balanceVariant,
-                        NextEmiDate: b.Loan?.DueDate.ToString("MMM dd, yyyy"),
+                        NextEmiDate: nextLoan?.DueDate.ToString("MMM dd, yyyy"),
                         NextEmiNote: nextEmiNote,
                         NextEmiNoteVariant: nextEmiNoteVariant,
-                        Status: b.Loan?.Status ?? "active",
-                        StatusLabel: (b.Loan?.Status ?? "active").ToUpper()
+                        Status: aggregatedStatus,
+                        StatusLabel: aggregatedStatus.ToUpper()
                     );
                 })
                 .ToList();
@@ -103,20 +117,25 @@ namespace LendLedgerApi.WebApi.Controllers
                 return NotFound(new { message = "Borrower not found." });
             }
 
-            var principal = borrower.Loan?.PrincipalAmount ?? 0;
-            var remaining = borrower.Loan?.RemainingBalance ?? 0;
+            var principal = borrower.Loans.Sum(l => l.PrincipalAmount);
+            var remaining = borrower.Loans.Sum(l => l.RemainingBalance);
             var paid = principal - remaining;
+
+            var aggregatedStatus = "active";
+            if (borrower.Loans.Any(l => l.Status == "overdue")) aggregatedStatus = "overdue";
+            else if (borrower.Loans.Any() && borrower.Loans.All(l => l.Status == "paid")) aggregatedStatus = "paid";
 
             // Stats
             var stats = new List<BorrowerProfileStatDto>
             {
                 new BorrowerProfileStatDto("lent", "Total Lent", $"${principal:N0}", "Principal", "outbound", "bg-primary-container/10", "text-primary-container", null),
                 new BorrowerProfileStatDto("paid", "Total Paid", $"${paid:N0}", "Repaid", "move_to_inbox", "bg-secondary-container/50", "text-secondary", null),
-                new BorrowerProfileStatDto("balance", "Balance Due", $"${remaining:N0}", "Outstanding", "account_balance_wallet", "bg-error-container", "text-error", borrower.Loan?.Status == "overdue" ? "error" : null),
+                new BorrowerProfileStatDto("balance", "Balance Due", $"${remaining:N0}", "Outstanding", "account_balance_wallet", "bg-error-container", "text-error", aggregatedStatus == "overdue" ? "error" : null),
                 new BorrowerProfileStatDto("interest", "Interest Earned", $"$0", "Earnings", "trending_up", "bg-tertiary-container/30", "text-tertiary", null)
             };
 
             // Repayments
+            var loanLookup = borrower.Loans.ToDictionary(l => l.Id, l => $"LID-{l.Id.ToString().Substring(0, 5).ToUpper()}");
             var repayments = borrower.Payments
                 .OrderByDescending(p => p.DateReceived)
                 .Select(p => new RepaymentRecordDto(
@@ -126,7 +145,8 @@ namespace LendLedgerApi.WebApi.Controllers
                     Amount: $"${p.Amount:N2}",
                     Method: p.Method,
                     MethodDot: p.Method == "Cash" ? "bg-tertiary" : "bg-primary-container",
-                    Evidence: string.IsNullOrEmpty(p.ReferenceId) ? "none" : "receipt"
+                    Evidence: string.IsNullOrEmpty(p.ReferenceId) ? "none" : "receipt",
+                    LoanDisplayId: p.LoanId.HasValue && loanLookup.ContainsKey(p.LoanId.Value) ? loanLookup[p.LoanId.Value] : null
                 ))
                 .ToList();
 
@@ -147,35 +167,58 @@ namespace LendLedgerApi.WebApi.Controllers
             // Trust score mock rules
             int trustScore = 750;
             string trustDesc = $"{borrower.FullName} maintains a consistent repayment record.";
-            if (borrower.Loan?.Status == "overdue")
+            if (aggregatedStatus == "overdue")
             {
                 trustScore = 550;
                 trustDesc = $"{borrower.FullName} is currently overdue. High risk warning.";
             }
 
+            var activeOrRecentLoan = borrower.Loans.Where(l => l.Status != "paid").OrderByDescending(l => l.StartDate).FirstOrDefault() 
+                                     ?? borrower.Loans.OrderByDescending(l => l.StartDate).FirstOrDefault();
+
+            var loans = borrower.Loans
+                .OrderBy(l => l.StartDate)
+                .Select(l => new LoanDetailDto(
+                    Id: l.Id.ToString(),
+                    DisplayId: $"LID-{l.Id.ToString().Substring(0, 5).ToUpper()}",
+                    PrincipalAmount: l.PrincipalAmount,
+                    RemainingBalance: l.RemainingBalance,
+                    EmiAmount: l.EmiAmount,
+                    InterestRate: l.InterestRate,
+                    InterestType: l.InterestType,
+                    RepaymentCycle: l.RepaymentCycle,
+                    StartDate: l.StartDate.ToString("dd MMM, yyyy"),
+                    DueDate: l.DueDate.ToString("dd MMM, yyyy"),
+                    Status: l.Status,
+                    StatusLabel: l.Status == "overdue" ? "Overdue" : l.Status == "paid" ? "Paid" : "Active",
+                    Notes: l.Notes
+                ))
+                .ToList();
+
             var profileDto = new BorrowerProfileDto(
                 Id: borrower.Id.ToString(),
                 Name: borrower.FullName,
-                Status: borrower.Loan?.Status ?? "active",
-                StatusLabel: borrower.Loan?.Status == "overdue" ? "Overdue" : borrower.Loan?.Status == "paid" ? "Paid" : "Active",
+                Status: aggregatedStatus,
+                StatusLabel: aggregatedStatus == "overdue" ? "Overdue" : aggregatedStatus == "paid" ? "Paid" : "Active",
                 Email: borrower.Email,
                 Phone: borrower.Phone,
                 Location: "Local Directory",
                 Stats: stats,
                 Repayments: repayments,
                 RepaymentProgress: progress,
-                RepaymentStart: $"Started: {borrower.Loan?.StartDate.ToString("MMM yyyy")}",
-                RepaymentTarget: $"Target: {borrower.Loan?.DueDate.ToString("MMM yyyy")}",
+                RepaymentStart: activeOrRecentLoan != null ? $"Started: {activeOrRecentLoan.StartDate.ToString("MMM yyyy")}" : string.Empty,
+                RepaymentTarget: activeOrRecentLoan != null ? $"Target: {activeOrRecentLoan.DueDate.ToString("MMM yyyy")}" : string.Empty,
                 LoanTerms: new LoanTermsDto(
-                    EmiAmount: $"${borrower.Loan?.EmiAmount:N2} / mo",
-                    StartDate: borrower.Loan?.StartDate.ToString("dd MMM, yyyy") ?? string.Empty,
-                    InterestRate: $"{borrower.Loan?.InterestRate:G}% P.A.",
-                    NextDue: borrower.Loan?.DueDate.ToString("dd MMM, yyyy") ?? string.Empty,
-                    Collateral: "Personal Trust"
+                    EmiAmount: activeOrRecentLoan != null ? $"${activeOrRecentLoan.EmiAmount:N2} / mo" : "$0.00 / mo",
+                    StartDate: activeOrRecentLoan?.StartDate.ToString("dd MMM, yyyy") ?? string.Empty,
+                    InterestRate: activeOrRecentLoan != null ? $"{activeOrRecentLoan.InterestRate:G}% P.A." : "0% P.A.",
+                    NextDue: activeOrRecentLoan?.DueDate.ToString("dd MMM, yyyy") ?? string.Empty,
+                    Collateral: activeOrRecentLoan != null && !string.IsNullOrEmpty(activeOrRecentLoan.Notes) ? activeOrRecentLoan.Notes : "Personal Trust"
                 ),
                 Notes: notes,
                 TrustScore: trustScore,
-                TrustDescription: trustDesc
+                TrustDescription: trustDesc,
+                Loans: loans
             );
 
             return Ok(profileDto);
@@ -184,23 +227,23 @@ namespace LendLedgerApi.WebApi.Controllers
         [HttpPost]
         public async Task<IActionResult> CreateBorrower([FromBody] CreateBorrowerDto dto)
         {
-            if (!_lookupService.IsValid("Category", dto.Category))
-            {
-                ModelState.AddModelError("Category", $"Invalid borrower category '{dto.Category}'.");
-            }
-            if (!_lookupService.IsValid("InterestType", dto.InterestType))
-            {
-                ModelState.AddModelError("InterestType", $"Invalid interest type '{dto.InterestType}'.");
-            }
-            if (!_lookupService.IsValid("RepaymentCycle", dto.RepaymentCycle))
-            {
-                ModelState.AddModelError("RepaymentCycle", $"Invalid repayment cycle '{dto.RepaymentCycle}'.");
-            }
+            //if (!_lookupService.IsValid("Category", dto.Category))
+            //{
+            //    ModelState.AddModelError("Category", $"Invalid borrower category '{dto.Category}'.");
+            //}
+            //if (!_lookupService.IsValid("InterestType", dto.InterestType))
+            //{
+            //    ModelState.AddModelError("InterestType", $"Invalid interest type '{dto.InterestType}'.");
+            //}
+            //if (!_lookupService.IsValid("RepaymentCycle", dto.RepaymentCycle))
+            //{
+            //    ModelState.AddModelError("RepaymentCycle", $"Invalid repayment cycle '{dto.RepaymentCycle}'.");
+            //}
 
-            if (!ModelState.IsValid)
-            {
-                return BadRequest(ModelState);
-            }
+            //if (!ModelState.IsValid)
+            //{
+            //    return BadRequest(ModelState);
+            //}
 
             var lenderId = LenderId;
 
@@ -267,18 +310,27 @@ namespace LendLedgerApi.WebApi.Controllers
             var lenderId = LenderId;
             var borrower = await _borrowerRepository.GetByIdAsync(id, lenderId);
 
-            if (borrower == null || borrower.Loan == null)
+            if (borrower == null || !borrower.Loans.Any())
             {
-                return NotFound(new { message = "Borrower or active loan not found." });
+                return NotFound(new { message = "Borrower or active loans not found." });
             }
 
-            var loan = borrower.Loan;
-            
+            var activeLoans = borrower.Loans
+                .Where(l => l.Status != "paid")
+                .OrderBy(l => l.StartDate)
+                .ToList();
+
+            if (!activeLoans.Any())
+            {
+                return BadRequest(new { message = "No active loans to apply payment to." });
+            }
+
             var payment = new Payment
             {
                 Id = Guid.NewGuid(),
                 BorrowerId = borrower.Id,
                 LenderId = lenderId,
+                LoanId = dto.LoanId,
                 Amount = dto.Amount,
                 DateReceived = dto.DateReceived,
                 Method = dto.Method,
@@ -289,22 +341,51 @@ namespace LendLedgerApi.WebApi.Controllers
 
             await _paymentRepository.AddAsync(payment);
 
-            // Update Loan Balance
-            loan.RemainingBalance = Math.Max(0, loan.RemainingBalance - dto.Amount);
-            if (loan.RemainingBalance <= 0)
+            var loansToProcess = new List<Loan>();
+
+            if (dto.LoanId.HasValue)
             {
-                loan.Status = "paid";
+                // Targeted repayment: apply payment to the specified loan only
+                var targetLoan = borrower.Loans.FirstOrDefault(l => l.Id == dto.LoanId.Value);
+                if (targetLoan == null)
+                {
+                    return NotFound(new { message = "Specified loan not found for this borrower." });
+                }
+                if (targetLoan.Status == "paid")
+                {
+                    return BadRequest(new { message = "The selected loan is already fully paid." });
+                }
+                loansToProcess.Add(targetLoan);
             }
             else
             {
-                if (loan.DueDate.Date >= DateTime.UtcNow.Date)
+                // FIFO: apply payment sequentially to oldest unpaid loans first
+                loansToProcess = activeLoans;
+            }
+
+            decimal remainingPayment = dto.Amount;
+            foreach (var loan in loansToProcess)
+            {
+                if (remainingPayment <= 0) break;
+
+                var allocation = Math.Min(loan.RemainingBalance, remainingPayment);
+                loan.RemainingBalance -= allocation;
+                remainingPayment -= allocation;
+
+                if (loan.RemainingBalance <= 0)
                 {
-                    loan.Status = "active";
+                    loan.Status = "paid";
+                }
+                else
+                {
+                    loan.Status = loan.DueDate.Date >= DateTime.UtcNow.Date ? "active" : "overdue";
                 }
             }
 
             await _paymentRepository.SaveChangesAsync();
-            return Created("", new { id = payment.Id, remainingBalance = loan.RemainingBalance });
+            
+            var totalRemaining = borrower.Loans.Sum(l => l.RemainingBalance);
+            return Created("", new { id = payment.Id, remainingBalance = totalRemaining });
         }
 
         [HttpPost("{id}/notes")]
@@ -376,5 +457,53 @@ namespace LendLedgerApi.WebApi.Controllers
 
             return NoContent();
         }
+
+        [HttpPost("{id}/loans")]
+        public async Task<IActionResult> AddLoan(Guid id, [FromBody] CreateLoanDto dto)
+        {
+            var lenderId = LenderId;
+            var borrower = await _borrowerRepository.GetByIdAsync(id, lenderId);
+
+            if (borrower == null)
+            {
+                return NotFound(new { message = "Borrower not found." });
+            }
+
+            var loan = new Loan
+            {
+                Id = Guid.NewGuid(),
+                BorrowerId = borrower.Id,
+                LenderId = lenderId,
+                PrincipalAmount = dto.LoanAmount,
+                RemainingBalance = dto.LoanAmount,
+                EmiAmount = dto.EmiAmount,
+                InterestRate = dto.InterestRate,
+                InterestType = dto.InterestType,
+                RepaymentCycle = dto.RepaymentCycle,
+                StartDate = dto.StartDate,
+                DueDate = dto.DueDate,
+                Notes = dto.Notes ?? string.Empty,
+                Status = dto.DueDate.Date < DateTime.UtcNow.Date ? "overdue" : "active"
+            };
+
+            await _dbContext.Loans.AddAsync(loan);
+            await _borrowerRepository.SaveChangesAsync();
+
+            return Created("", new { id = loan.Id });
+        }
     }
+}
+
+namespace LendLedgerApi.Application.Dtos
+{
+    public record CreateLoanDto(
+        decimal LoanAmount,
+        decimal EmiAmount,
+        decimal InterestRate,
+        string InterestType,
+        string RepaymentCycle,
+        DateTime StartDate,
+        DateTime DueDate,
+        string? Notes
+    );
 }

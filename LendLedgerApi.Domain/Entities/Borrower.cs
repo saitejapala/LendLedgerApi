@@ -16,7 +16,7 @@ namespace LendLedgerApi.Domain.Entities
 
         // Navigation properties
         public Lender? Lender { get; set; }
-        public Loan? Loan { get; set; }
+        public ICollection<Loan> Loans { get; set; } = new List<Loan>();
         public ICollection<Payment> Payments { get; set; } = new List<Payment>();
         public ICollection<Note> Notes { get; set; } = new List<Note>();
     }

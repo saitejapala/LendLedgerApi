@@ -47,7 +47,8 @@ namespace LendLedgerApi.Application.Dtos
         [Required] DateTime DateReceived,
         [Required] string Method,
         string? ReferenceId,
-        string? Notes
+        string? Notes,
+        Guid? LoanId
     );
 
     public record CreateNoteDto(
@@ -76,7 +77,8 @@ namespace LendLedgerApi.Application.Dtos
         string Amount,
         string Method,
         string MethodDot,
-        string Evidence
+        string Evidence,
+        string? LoanDisplayId
     );
 
     public record BorrowerNoteDto(
@@ -92,6 +94,22 @@ namespace LendLedgerApi.Application.Dtos
         string InterestRate,
         string NextDue,
         string Collateral
+    );
+
+    public record LoanDetailDto(
+        string Id,
+        string DisplayId,
+        decimal PrincipalAmount,
+        decimal RemainingBalance,
+        decimal EmiAmount,
+        decimal InterestRate,
+        string InterestType,
+        string RepaymentCycle,
+        string StartDate,
+        string DueDate,
+        string Status,
+        string StatusLabel,
+        string? Notes
     );
 
     public record BorrowerProfileDto(
@@ -110,6 +128,7 @@ namespace LendLedgerApi.Application.Dtos
         LoanTermsDto LoanTerms,
         List<BorrowerNoteDto> Notes,
         int TrustScore,
-        string TrustDescription
+        string TrustDescription,
+        List<LoanDetailDto> Loans
     );
 }

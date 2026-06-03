@@ -115,11 +115,38 @@ builder.Services.AddSwaggerGen(c =>
 
 var app = builder.Build();
 
-// 7. Initialize Lookup Cache at Startup
+// 7. Initialize Lookup Cache at Startup and Drop Unique Constraint
 using (var scope = app.Services.CreateScope())
 {
     var lookupService = scope.ServiceProvider.GetRequiredService<ILookupService>();
     await lookupService.InitializeAsync();
+
+    var dbContext = scope.ServiceProvider.GetRequiredService<LendLedgerDbContext>();
+    try
+    {
+        await dbContext.Database.ExecuteSqlRawAsync("ALTER TABLE public.loans DROP CONSTRAINT IF EXISTS loans_borrower_id_key;");
+        await dbContext.Database.ExecuteSqlRawAsync(@"
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name   = 'payments'
+                      AND column_name  = 'loan_id'
+                ) THEN
+                    ALTER TABLE public.payments ADD COLUMN loan_id uuid NULL;
+                    ALTER TABLE public.payments
+                        ADD CONSTRAINT fk_payments_loan_id
+                        FOREIGN KEY (loan_id) REFERENCES public.loans(id) ON DELETE SET NULL;
+                END IF;
+            END
+            $$;
+        ");
+    }
+    catch (Exception ex)
+    {
+        Console.WriteLine($"Warning: Failed to run startup migrations: {ex.Message}");
+    }
 }
 
 // 8. Middleware Pipeline

@@ -21,7 +21,7 @@ namespace LendLedgerApi.Infrastructure.Repositories
         public async Task<Borrower?> GetByIdAsync(Guid id, Guid lenderId)
         {
             return await _dbContext.Borrowers
-                .Include(b => b.Loan)
+                .Include(b => b.Loans)
                 .Include(b => b.Payments)
                 .Include(b => b.Notes)
                 .FirstOrDefaultAsync(b => b.Id == id && b.LenderId == lenderId);
@@ -30,7 +30,7 @@ namespace LendLedgerApi.Infrastructure.Repositories
         public async Task<IEnumerable<Borrower>> GetAllAsync(Guid lenderId, string? status, string? sort, string? search)
         {
             var query = _dbContext.Borrowers
-                .Include(b => b.Loan)
+                .Include(b => b.Loans)
                 .Where(b => b.LenderId == lenderId)
                 .AsQueryable();
 
@@ -47,14 +47,25 @@ namespace LendLedgerApi.Infrastructure.Repositories
             // Status Filter
             if (!string.IsNullOrWhiteSpace(status) && status != "all")
             {
-                query = query.Where(b => b.Loan != null && b.Loan.Status == status);
+                if (status == "overdue")
+                {
+                    query = query.Where(b => b.Loans.Any(l => l.Status == "overdue"));
+                }
+                else if (status == "active")
+                {
+                    query = query.Where(b => b.Loans.Any(l => l.Status == "active") && !b.Loans.Any(l => l.Status == "overdue"));
+                }
+                else if (status == "paid")
+                {
+                    query = query.Where(b => b.Loans.All(l => l.Status == "paid") && b.Loans.Any());
+                }
             }
 
             // Sorting
             query = sort switch
             {
-                "balance-high" => query.OrderByDescending(b => b.Loan != null ? b.Loan.RemainingBalance : 0),
-                "due-date" => query.OrderBy(b => b.Loan != null ? b.Loan.DueDate : DateTime.MaxValue),
+                "balance-high" => query.OrderByDescending(b => b.Loans.Sum(l => l.RemainingBalance)),
+                "due-date" => query.OrderBy(b => b.Loans.Where(l => l.Status != "paid").Min(l => (DateTime?)l.DueDate) ?? DateTime.MaxValue),
                 "newest" or _ => query.OrderByDescending(b => b.CreatedAt)
             };
 

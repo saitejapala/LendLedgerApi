@@ -35,14 +35,12 @@ namespace LendLedgerApi.Infrastructure.Data
                     .OnDelete(DeleteBehavior.Cascade);
             });
 
-            // Loan Configuration (One-to-One with Borrower)
+            // Loan Configuration (One-to-Many with Borrower)
             modelBuilder.Entity<Loan>(entity =>
             {
-                entity.HasIndex(e => e.BorrowerId).IsUnique();
-
                 entity.HasOne(d => d.Borrower)
-                    .WithOne(p => p.Loan)
-                    .HasForeignKey<Loan>(d => d.BorrowerId)
+                    .WithMany(p => p.Loans)
+                    .HasForeignKey(d => d.BorrowerId)
                     .OnDelete(DeleteBehavior.Cascade);
 
                 entity.HasOne(d => d.Lender)
@@ -63,6 +61,12 @@ namespace LendLedgerApi.Infrastructure.Data
                     .WithMany(p => p.Payments)
                     .HasForeignKey(d => d.LenderId)
                     .OnDelete(DeleteBehavior.Restrict);
+
+                entity.HasOne(d => d.Loan)
+                    .WithMany()
+                    .HasForeignKey(d => d.LoanId)
+                    .OnDelete(DeleteBehavior.SetNull)
+                    .IsRequired(false);
             });
 
             // Note Configuration
