@@ -23,9 +23,25 @@ namespace LendLedgerApi.WebApi.Controllers
         }
 
         [HttpGet]
-        public async Task<ActionResult<DashboardDataDto>> GetDashboardData()
+        public async Task<ActionResult<DashboardDataDto>> GetDashboardData([FromQuery] string range = "all")
         {
             var lenderId = LenderId;
+
+            DateTime? startDate = null;
+            var today = DateTime.UtcNow.Date;
+
+            if (range == "30d")
+            {
+                startDate = today.AddDays(-30);
+            }
+            else if (range == "90d")
+            {
+                startDate = today.AddDays(-90);
+            }
+            else if (range == "ytd")
+            {
+                startDate = new DateTime(today.Year, 1, 1);
+            }
 
             // 1. Fetch Lender details
             var lender = await _dbContext.Lenders
@@ -41,15 +57,38 @@ namespace LendLedgerApi.WebApi.Controllers
                 .Where(l => l.LenderId == lenderId)
                 .ToListAsync();
 
+            try
+            {
+                var debugData = new
+                {
+                    loans = loans.Select(l => new { l.Id, l.Status, l.DueDate, l.RemainingBalance, BorrowerNull = l.Borrower == null, BorrowerName = l.Borrower?.FullName }),
+                    today = DateTime.UtcNow.Date
+                };
+                System.IO.File.WriteAllText(@"c:\Users\Satya\React Projects\lender-management\debug_loans.json", System.Text.Json.JsonSerializer.Serialize(debugData));
+            }
+            catch (Exception ex)
+            {
+                System.IO.File.WriteAllText(@"c:\Users\Satya\React Projects\lender-management\debug_loans_error.txt", ex.ToString());
+            }
+
             var payments = await _dbContext.Payments
                 .Where(p => p.LenderId == lenderId)
                 .ToListAsync();
 
+            // Filter lists based on the resolved date range filter
+            var filteredLoans = startDate.HasValue
+                ? loans.Where(l => l.StartDate >= startDate.Value).ToList()
+                : loans;
+
+            var filteredPayments = startDate.HasValue
+                ? payments.Where(p => p.DateReceived >= startDate.Value).ToList()
+                : payments;
+
             // 3. Compute Metrics
-            decimal totalRecovered = payments.Sum(p => p.Amount);
-            decimal totalOutstanding = loans.Where(l => l.Status != "paid").Sum(l => l.RemainingBalance);
-            decimal totalLent = loans.Sum(l => l.PrincipalAmount);
-            int overdueAccountsCount = loans.Count(l => l.Status == "overdue");
+            decimal totalRecovered = filteredPayments.Sum(p => p.Amount);
+            decimal totalOutstanding = filteredLoans.Where(l => l.Status != "paid").Sum(l => l.RemainingBalance);
+            decimal totalLent = filteredLoans.Sum(l => l.PrincipalAmount);
+            int overdueAccountsCount = filteredLoans.Count(l => l.Status == "overdue");
             
             int recoveryRate = totalLent > 0 
                 ? (int)Math.Round((totalRecovered / totalLent) * 100) 
@@ -60,7 +99,7 @@ namespace LendLedgerApi.WebApi.Controllers
                 new MetricCardDto(
                     Id: "recovered",
                     Label: "Total Recovered",
-                    Value: $"${totalRecovered:N0}",
+                    Value: $"₹{totalRecovered:N0}",
                     AccentColor: "bg-primary",
                     Icon: "payments",
                     IconBg: "bg-secondary-container",
@@ -69,7 +108,7 @@ namespace LendLedgerApi.WebApi.Controllers
                 new MetricCardDto(
                     Id: "outstanding",
                     Label: "Outstanding",
-                    Value: $"${totalOutstanding:N0}",
+                    Value: $"₹{totalOutstanding:N0}",
                     AccentColor: "bg-secondary",
                     Icon: "pending_actions",
                     IconBg: "bg-surface-container",
@@ -97,9 +136,9 @@ namespace LendLedgerApi.WebApi.Controllers
             };
 
             // 4. Compute Status Distribution
-            int totalLoansCount = loans.Count;
-            int activeLoansCount = loans.Count(l => l.Status == "active");
-            int overdueLoansCount = loans.Count(l => l.Status == "overdue");
+            int totalLoansCount = filteredLoans.Count;
+            int activeLoansCount = filteredLoans.Count(l => l.Status == "active");
+            int overdueLoansCount = filteredLoans.Count(l => l.Status == "overdue");
 
             double activePercent = totalLoansCount > 0 ? Math.Round((double)activeLoansCount / totalLoansCount * 100, 1) : 0;
             double overduePercent = totalLoansCount > 0 ? Math.Round((double)overdueLoansCount / totalLoansCount * 100, 1) : 0;
@@ -112,12 +151,11 @@ namespace LendLedgerApi.WebApi.Controllers
 
             // 5. Compute Urgent Followups
             var urgentFollowups = new List<UrgentFollowupDto>();
-            var nonPaidLoans = loans.Where(l => l.Status != "paid" && l.Borrower != null).ToList();
+            var nonPaidLoans = filteredLoans.Where(l => l.Status != "paid" && l.Borrower != null).ToList();
 
             foreach (var loan in nonPaidLoans)
             {
                 var dueDate = loan.DueDate;
-                var today = DateTime.UtcNow.Date;
                 if (today > dueDate.Date)
                 {
                     var daysOverdue = (int)(today - dueDate.Date).TotalDays;
@@ -136,7 +174,7 @@ namespace LendLedgerApi.WebApi.Controllers
                         Name: name,
                         Initials: initials.Length > 2 ? initials.Substring(0, 2).ToUpper() : initials.ToUpper(),
                         LoanId: $"LD-{loan.Id.ToString().Substring(0, 4).ToUpper()}",
-                        Amount: $"${loan.RemainingBalance:N2}",
+                        Amount: $"₹{loan.RemainingBalance:N2}",
                         Status: status,
                         StatusVariant: statusVariant,
                         DaysOverdue: daysOverdue,
@@ -159,7 +197,7 @@ namespace LendLedgerApi.WebApi.Controllers
                             Name: name,
                             Initials: initials.Length > 2 ? initials.Substring(0, 2).ToUpper() : initials.ToUpper(),
                             LoanId: $"LD-{loan.Id.ToString().Substring(0, 4).ToUpper()}",
-                            Amount: $"${loan.RemainingBalance:N2}",
+                            Amount: $"₹{loan.RemainingBalance:N2}",
                             Status: "Recent",
                             StatusVariant: "recent",
                             DaysOverdue: daysRemaining,

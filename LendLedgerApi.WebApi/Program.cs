@@ -139,6 +139,24 @@ using (var scope = app.Services.CreateScope())
                         ADD CONSTRAINT fk_payments_loan_id
                         FOREIGN KEY (loan_id) REFERENCES public.loans(id) ON DELETE SET NULL;
                 END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name   = 'loans'
+                      AND column_name  = 'tenure'
+                ) THEN
+                    ALTER TABLE public.loans ADD COLUMN tenure integer NOT NULL DEFAULT 0;
+                END IF;
+
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_schema = 'public'
+                      AND table_name   = 'loans'
+                      AND column_name  = 'total_payment'
+                ) THEN
+                    ALTER TABLE public.loans ADD COLUMN total_payment numeric NOT NULL DEFAULT 0.0;
+                END IF;
             END
             $$;
         ");

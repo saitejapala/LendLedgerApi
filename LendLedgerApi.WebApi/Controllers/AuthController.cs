@@ -87,8 +87,22 @@ namespace LendLedgerApi.WebApi.Controllers
             return Ok(result);
         }
         [HttpGet("Health")]
-        public IActionResult Health()
+        public IActionResult Health([FromServices] LendLedgerApi.Infrastructure.Data.LendLedgerDbContext dbContext)
         {
+            try
+            {
+                var lenders = dbContext.Lenders.ToList();
+                var loans = dbContext.Loans.ToList();
+                var debugData = new {
+                    lenders = lenders.Select(l => new { l.Id, l.Email, l.FullName }),
+                    loans = loans.Select(l => new { l.Id, l.Status, l.DueDate, l.RemainingBalance, l.BorrowerId })
+                };
+                System.IO.File.WriteAllText(@"c:\Users\Satya\React Projects\lender-management\debug_health.json", System.Text.Json.JsonSerializer.Serialize(debugData));
+            }
+            catch (System.Exception ex)
+            {
+                System.IO.File.WriteAllText(@"c:\Users\Satya\React Projects\lender-management\debug_health_error.txt", ex.ToString());
+            }
             return Ok("API is Online");
         }
     }

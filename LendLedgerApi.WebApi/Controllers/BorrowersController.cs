@@ -57,7 +57,7 @@ namespace LendLedgerApi.WebApi.Controllers
                 .Select(b =>
                 {
                     var remaining = b.Loans.Sum(l => l.RemainingBalance);
-                    var principal = b.Loans.Sum(l => l.PrincipalAmount);
+                    var totalLent = b.Loans.Sum(l => l.TotalPayment > 0 ? l.TotalPayment : l.PrincipalAmount);
                     
                     var aggregatedStatus = "active";
                     if (b.Loans.Any(l => l.Status == "overdue")) aggregatedStatus = "overdue";
@@ -91,8 +91,8 @@ namespace LendLedgerApi.WebApi.Controllers
                         Name: b.FullName,
                         LoanId: recentLoanForId != null ? $"LID-{recentLoanForId.Id.ToString().Substring(0, 5).ToUpper()}" : string.Empty,
                         Contact: b.Phone,
-                        TotalLent: $"${principal:N2}",
-                        RemainingBalance: $"${remaining:N2}",
+                        TotalLent: $"₹{totalLent:N2}",
+                        RemainingBalance: $"₹{remaining:N2}",
                         BalanceVariant: balanceVariant,
                         NextEmiDate: nextLoan?.DueDate.ToString("MMM dd, yyyy"),
                         NextEmiNote: nextEmiNote,
@@ -118,8 +118,10 @@ namespace LendLedgerApi.WebApi.Controllers
             }
 
             var principal = borrower.Loans.Sum(l => l.PrincipalAmount);
+            var totalLent = borrower.Loans.Sum(l => l.TotalPayment > 0 ? l.TotalPayment : l.PrincipalAmount);
             var remaining = borrower.Loans.Sum(l => l.RemainingBalance);
-            var paid = principal - remaining;
+            var paid = Math.Max(0, totalLent - remaining);
+            var interest = Math.Max(0, totalLent - principal);
 
             var aggregatedStatus = "active";
             if (borrower.Loans.Any(l => l.Status == "overdue")) aggregatedStatus = "overdue";
@@ -128,26 +130,43 @@ namespace LendLedgerApi.WebApi.Controllers
             // Stats
             var stats = new List<BorrowerProfileStatDto>
             {
-                new BorrowerProfileStatDto("lent", "Total Lent", $"${principal:N0}", "Principal", "outbound", "bg-primary-container/10", "text-primary-container", null),
-                new BorrowerProfileStatDto("paid", "Total Paid", $"${paid:N0}", "Repaid", "move_to_inbox", "bg-secondary-container/50", "text-secondary", null),
-                new BorrowerProfileStatDto("balance", "Balance Due", $"${remaining:N0}", "Outstanding", "account_balance_wallet", "bg-error-container", "text-error", aggregatedStatus == "overdue" ? "error" : null),
-                new BorrowerProfileStatDto("interest", "Interest Earned", $"$0", "Earnings", "trending_up", "bg-tertiary-container/30", "text-tertiary", null)
+                new BorrowerProfileStatDto("lent", "Total Lent", $"₹{totalLent:N0}", "Principal+Interest", "outbound", "bg-primary-container/10", "text-primary-container", null),
+                new BorrowerProfileStatDto("paid", "Total Paid", $"₹{paid:N0}", "Repaid", "move_to_inbox", "bg-secondary-container/50", "text-secondary", null),
+                new BorrowerProfileStatDto("balance", "Balance Due", $"₹{remaining:N0}", "Outstanding", "account_balance_wallet", "bg-error-container", "text-error", aggregatedStatus == "overdue" ? "error" : null),
+                new BorrowerProfileStatDto("interest", "Interest Earned", $"₹{interest:N0}", "Expected", "trending_up", "bg-tertiary-container/30", "text-tertiary", null)
             };
 
             // Repayments
             var loanLookup = borrower.Loans.ToDictionary(l => l.Id, l => $"LID-{l.Id.ToString().Substring(0, 5).ToUpper()}");
             var repayments = borrower.Payments
                 .OrderByDescending(p => p.DateReceived)
-                .Select(p => new RepaymentRecordDto(
-                    Id: p.Id.ToString(),
-                    Date: p.DateReceived.ToString("dd MMM, yyyy"),
-                    Time: p.DateReceived.ToString("hh:mm tt"),
-                    Amount: $"${p.Amount:N2}",
-                    Method: p.Method,
-                    MethodDot: p.Method == "Cash" ? "bg-tertiary" : "bg-primary-container",
-                    Evidence: string.IsNullOrEmpty(p.ReferenceId) ? "none" : "receipt",
-                    LoanDisplayId: p.LoanId.HasValue && loanLookup.ContainsKey(p.LoanId.Value) ? loanLookup[p.LoanId.Value] : null
-                ))
+                .Select(p =>
+                {
+                    string? displayId = null;
+                    if (p.LoanId.HasValue && loanLookup.ContainsKey(p.LoanId.Value))
+                    {
+                        displayId = loanLookup[p.LoanId.Value];
+                    }
+                    else if (borrower.Loans.Any())
+                    {
+                        var targetLoan = borrower.Loans
+                            .Where(l => l.StartDate.Date <= p.DateReceived.Date)
+                            .OrderBy(l => l.StartDate)
+                            .FirstOrDefault() ?? borrower.Loans.OrderBy(l => l.StartDate).First();
+                        displayId = loanLookup[targetLoan.Id];
+                    }
+
+                    return new RepaymentRecordDto(
+                        Id: p.Id.ToString(),
+                        Date: p.DateReceived.ToString("dd MMM, yyyy"),
+                        Time: p.DateReceived.ToString("hh:mm tt"),
+                        Amount: $"₹{p.Amount:N2}",
+                        Method: p.Method,
+                        MethodDot: p.Method == "Cash" ? "bg-tertiary" : "bg-primary-container",
+                        Evidence: string.IsNullOrEmpty(p.ReferenceId) ? "none" : "receipt",
+                        LoanDisplayId: displayId
+                    );
+                })
                 .ToList();
 
             // Notes
@@ -162,7 +181,7 @@ namespace LendLedgerApi.WebApi.Controllers
                 .ToList();
 
             // Calculate progress
-            int progress = principal > 0 ? (int)Math.Round((paid / principal) * 100) : 0;
+            int progress = totalLent > 0 ? (int)Math.Round((paid / totalLent) * 100) : 0;
 
             // Trust score mock rules
             int trustScore = 750;
@@ -191,7 +210,9 @@ namespace LendLedgerApi.WebApi.Controllers
                     DueDate: l.DueDate.ToString("dd MMM, yyyy"),
                     Status: l.Status,
                     StatusLabel: l.Status == "overdue" ? "Overdue" : l.Status == "paid" ? "Paid" : "Active",
-                    Notes: l.Notes
+                    Notes: l.Notes,
+                    Tenure: l.Tenure,
+                    TotalPayment: l.TotalPayment > 0 ? l.TotalPayment : l.PrincipalAmount
                 ))
                 .ToList();
 
@@ -209,9 +230,9 @@ namespace LendLedgerApi.WebApi.Controllers
                 RepaymentStart: activeOrRecentLoan != null ? $"Started: {activeOrRecentLoan.StartDate.ToString("MMM yyyy")}" : string.Empty,
                 RepaymentTarget: activeOrRecentLoan != null ? $"Target: {activeOrRecentLoan.DueDate.ToString("MMM yyyy")}" : string.Empty,
                 LoanTerms: new LoanTermsDto(
-                    EmiAmount: activeOrRecentLoan != null ? $"${activeOrRecentLoan.EmiAmount:N2} / mo" : "$0.00 / mo",
+                    EmiAmount: activeOrRecentLoan != null ? $"₹{activeOrRecentLoan.EmiAmount:N2} / mo" : "₹0.00 / mo",
                     StartDate: activeOrRecentLoan?.StartDate.ToString("dd MMM, yyyy") ?? string.Empty,
-                    InterestRate: activeOrRecentLoan != null ? $"{activeOrRecentLoan.InterestRate:G}% P.A." : "0% P.A.",
+                    InterestRate: activeOrRecentLoan != null ? $"{activeOrRecentLoan.InterestRate:G}% P.M." : "0% P.M.",
                     NextDue: activeOrRecentLoan?.DueDate.ToString("dd MMM, yyyy") ?? string.Empty,
                     Collateral: activeOrRecentLoan != null && !string.IsNullOrEmpty(activeOrRecentLoan.Notes) ? activeOrRecentLoan.Notes : "Personal Trust"
                 ),
@@ -270,8 +291,10 @@ namespace LendLedgerApi.WebApi.Controllers
                     BorrowerId = borrower.Id,
                     LenderId = lenderId,
                     PrincipalAmount = dto.LoanAmount,
-                    RemainingBalance = dto.LoanAmount,
+                    RemainingBalance = dto.TotalPayment > 0 ? dto.TotalPayment : dto.LoanAmount,
                     EmiAmount = dto.EmiAmount,
+                    TotalPayment = dto.TotalPayment > 0 ? dto.TotalPayment : dto.LoanAmount,
+                    Tenure = dto.Tenure,
                     InterestRate = dto.InterestRate,
                     InterestType = dto.InterestType,
                     RepaymentCycle = dto.RepaymentCycle,
@@ -330,7 +353,7 @@ namespace LendLedgerApi.WebApi.Controllers
                 Id = Guid.NewGuid(),
                 BorrowerId = borrower.Id,
                 LenderId = lenderId,
-                LoanId = dto.LoanId,
+                LoanId = dto.LoanId ?? (activeLoans.Any() ? activeLoans.First().Id : null),
                 Amount = dto.Amount,
                 DateReceived = dto.DateReceived,
                 Method = dto.Method,
@@ -475,8 +498,10 @@ namespace LendLedgerApi.WebApi.Controllers
                 BorrowerId = borrower.Id,
                 LenderId = lenderId,
                 PrincipalAmount = dto.LoanAmount,
-                RemainingBalance = dto.LoanAmount,
+                RemainingBalance = dto.TotalPayment > 0 ? dto.TotalPayment : dto.LoanAmount,
                 EmiAmount = dto.EmiAmount,
+                TotalPayment = dto.TotalPayment > 0 ? dto.TotalPayment : dto.LoanAmount,
+                Tenure = dto.Tenure,
                 InterestRate = dto.InterestRate,
                 InterestType = dto.InterestType,
                 RepaymentCycle = dto.RepaymentCycle,
@@ -504,6 +529,8 @@ namespace LendLedgerApi.Application.Dtos
         string RepaymentCycle,
         DateTime StartDate,
         DateTime DueDate,
-        string? Notes
+        string? Notes,
+        int Tenure,
+        decimal TotalPayment
     );
 }

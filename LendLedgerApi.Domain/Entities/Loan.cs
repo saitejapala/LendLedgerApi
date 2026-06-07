@@ -10,6 +10,8 @@ namespace LendLedgerApi.Domain.Entities
         public decimal PrincipalAmount { get; set; }
         public decimal RemainingBalance { get; set; }
         public decimal EmiAmount { get; set; }
+        public decimal TotalPayment { get; set; }   // Principal + Total Interest (full repayable amount)
+        public int Tenure { get; set; }              // Number of repayment periods
         public decimal InterestRate { get; set; }
         public string InterestType { get; set; } = string.Empty; // Fixed Monthly, Reducing Balance, Flat Rate, No Interest
         public string RepaymentCycle { get; set; } = string.Empty; // Monthly, Weekly, Quarterly, Lump Sum

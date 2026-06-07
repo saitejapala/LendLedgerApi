@@ -16,6 +16,8 @@ namespace LendLedgerApi.Application.Dtos
         [Required] DateTime StartDate,
         [Required] DateTime DueDate,
         [Required] string RepaymentCycle,
+        int Tenure,
+        decimal TotalPayment,
         string? Notes,
         bool AutoReminders
     );
@@ -109,7 +111,9 @@ namespace LendLedgerApi.Application.Dtos
         string DueDate,
         string Status,
         string StatusLabel,
-        string? Notes
+        string? Notes,
+        int Tenure,
+        decimal TotalPayment
     );
 
     public record BorrowerProfileDto(
